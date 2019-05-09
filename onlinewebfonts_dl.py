@@ -30,11 +30,13 @@ class OnlineWebFontsSession(Session):
 
     def get_search(self, query, cursor=SEARCH_START_CURSOR):
         rv = self._ajax(type='search', q=query, p=cursor)
-        # Returns cursor, data
+        # Returns data, next_cursor
         # Data format is:
         # id, full name, name (uniq?), type (underscored?), type(spaces?),
         # author (underscored?), author (spaces?), size str
-        return rv['p'], rv['data']
+        if rv['data'] == 'end':
+            return [], None
+        return rv['data'], rv.get('p')
 
     def get_download_url(self, id, name, formats=DOWNLOAD_DEFAULT_FORMATS):
         # referer is not checked, but just in case...
@@ -61,7 +63,7 @@ class OnlineWebFontsSession(Session):
     def download_all(self, query, formats=DOWNLOAD_DEFAULT_FORMATS,
                      to='./', cursor=SEARCH_START_CURSOR):
         while cursor:
-            cursor, data = self.get_search(query, cursor)
+            data, cursor = self.get_search(query, cursor)
             assert data or not cursor
             for row in data:
                 url = self.get_download_url(row[0], row[2], formats)
@@ -75,16 +77,19 @@ class OnlineWebFontsSession(Session):
               show_default=True)
 @click.option('--to', default='./', show_default=True,
               help='download directory')
+@click.option('--cursor', default=SEARCH_START_CURSOR,
+              help='start cursor (integer offset) for search')
 @click.option('--query', prompt='Query to search')
-def main(formats, to, query):
+def main(formats, to, cursor, query):
     import logging
     logging.basicConfig()
     logging.getLogger().setLevel(logging.DEBUG)
 
     session = OnlineWebFontsSession()
-    for row, local_filename in session.download_all(query, formats.split(','),
-                                                    to):
-        logging.info(f'Downloaded {row} to {local_filename}')
+    generator = session.download_all(query, formats=formats.split(','),
+                                     to=to, cursor=cursor)
+    for i, (row, local_filename) in enumerate(generator):
+        logging.info(f'Downloaded {i + int(cursor)} {row} to {local_filename}')
 
 
 if __name__ == '__main__':
