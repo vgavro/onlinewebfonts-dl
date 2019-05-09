@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import json
+import os.path
 
 import click
 from requests import Session
@@ -8,12 +9,18 @@ from requests import Session
 # This is hack because ajax is not supposed to be called on 0, obviously
 SEARCH_START_CURSOR = '00'
 DOWNLOAD_DEFAULT_FORMATS = ['fontface', 'ttf']
+USER_AGENT = ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/72.0.3626.96 Safari/537.36')
 
 
 class OnlineWebFontsSession(Session):
-    def _ajax(self, subdomain='www', cookies={}, **kwargs):
+    def _ajax(self, subdomain='www', cookies=None, headers=None, **kwargs):
+        # User-Agent is not checked, but just in case...
+        headers = headers or {}
+        headers.setdefault('User-Agent', USER_AGENT)
+
         resp = self.get(f'https://{subdomain}.onlinewebfonts.com/ajax.html',
-                        cookies=cookies, params=kwargs)
+                        headers=headers, cookies=cookies, params=kwargs)
         resp.raise_for_status()
         # Strips '(', ')', as this endpoint made for JSONP callback
         rv = json.loads(resp.text[1:-1])
@@ -30,8 +37,14 @@ class OnlineWebFontsSession(Session):
         return rv['p'], rv['data']
 
     def get_download_url(self, id, name, formats=DOWNLOAD_DEFAULT_FORMATS):
-        return (self._ajax('cdn', cookies={'downloadname': name},
-                type='a', id=id, format='|'.join(formats)))['data']
+        # referer is not checked, but just in case...
+        referer = f'https://www.onlinewebfonts.com/download/{id}'
+        return self._ajax(
+            'cdn', cookies={'downloadname': name},
+            headers={'Referer': referer},
+            type='a', id=id, format='|'.join(formats),
+            # format=('|'.join(formats) + '|').encode('utf8')
+        )['data']
 
     def download(self, url, local_filename=None, chunk_size=8192):
         # https://stackoverflow.com/a/16696317/450103
@@ -46,27 +59,31 @@ class OnlineWebFontsSession(Session):
         return local_filename
 
     def download_all(self, query, formats=DOWNLOAD_DEFAULT_FORMATS,
-                     cursor=SEARCH_START_CURSOR):
+                     to='./', cursor=SEARCH_START_CURSOR):
         while cursor:
             cursor, data = self.get_search(query, cursor)
             assert data or not cursor
             for row in data:
-                url = self.get_download_url(row[0], row[2])
-                local_filename = self.download(url)
+                url = self.get_download_url(row[0], row[2], formats)
+                local_filename = self.download(
+                    url, os.path.join(to, f'{row[5]}-{row[2]}-{row[0]}.zip'))
                 yield row, local_filename
 
 
 @click.command()
 @click.option('--formats', default=','.join(DOWNLOAD_DEFAULT_FORMATS),
               show_default=True)
+@click.option('--to', default='./', show_default=True,
+              help='download directory')
 @click.option('--query', prompt='Query to search')
-def main(formats, query):
+def main(formats, to, query):
     import logging
     logging.basicConfig()
     logging.getLogger().setLevel(logging.DEBUG)
 
     session = OnlineWebFontsSession()
-    for row, local_filename in session.download_all(query, formats.split(',')):
+    for row, local_filename in session.download_all(query, formats.split(','),
+                                                    to):
         logging.info(f'Downloaded {row} to {local_filename}')
 
 
